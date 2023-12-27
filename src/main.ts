@@ -2,7 +2,8 @@ import {Comment, Devvit, Post, Subreddit, TriggerContext} from '@devvit/public-a
 
 Devvit.configure({
     redditAPI: true,
-    http: true
+    http: true,
+    redis: true
 });
 
 Devvit.addSettings([
@@ -73,7 +74,7 @@ Devvit.addSettings([
 // Logging on a PostSubmit event
 Devvit.addTrigger({
     events: ['PostSubmit', 'CommentCreate'],
-    onEvent: async function (event, context) {
+    onEvent: async function (event: any, context: TriggerContext) {
         console.log(`Received ${event.type} event:\n${JSON.stringify(event)}`);
         if (await shouldRelay(event, context)) {
             await relay(event, context);
@@ -84,6 +85,7 @@ Devvit.addTrigger({
 async function relay(event: any, context: TriggerContext) {
     console.log(`Relaying event:\n${JSON.stringify(event)}`);
     const {
+        redis,
         settings
     } = context;
     const {
@@ -127,12 +129,14 @@ async function relay(event: any, context: TriggerContext) {
         },
         body: JSON.stringify(data),
     })
+    await redis.set(item.id, 'true');
     console.log(`Webhook response: ${response.status} ${await response.text()}`);
 }
 
 async function shouldRelay(event: any, context: TriggerContext): Promise<boolean> {
     console.log(`Checking if we should relay event:\n${JSON.stringify(event)}`);
     const {
+        redis,
         reddit,
         settings
     } = context;
@@ -151,6 +155,13 @@ async function shouldRelay(event: any, context: TriggerContext): Promise<boolean
         itemType = 'comment'
     }
     let shouldRelay = contentType == 'all' || contentType == itemType;
+    let item: Post | Comment;
+    if (itemType === 'post') {
+        item = event.post
+    } else {
+        item = event.comment
+    }
+    shouldRelay = shouldRelay && !(await redis.get(item.id) === 'true');
     if (shouldRelay) {
         // @ts-ignore
         const username: string = await settings.get('specific-username');
