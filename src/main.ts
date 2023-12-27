@@ -54,7 +54,7 @@ Devvit.addSettings([
     },
     {
         type: 'group',
-        label: 'Filter by username/moderators',
+        label: 'Filter by username(s)/moderators',
         fields: [
             {
                 type: 'boolean',
@@ -64,7 +64,7 @@ Devvit.addSettings([
             {
                 type: 'string',
                 name: 'specific-username',
-                label: 'Username (without the "u/") or enter "m" for all moderators:',
+                label: 'Username (without the "u/") or enter "m" for all moderators. Separate each item with a comma to include multiple users.',
             },
         ],
     },
@@ -130,7 +130,7 @@ async function relay(event: any, context: TriggerContext) {
     console.log(`Webhook response: ${response.status} ${await response.text()}`);
 }
 
-async function shouldRelay(event: any, context: TriggerContext) {
+async function shouldRelay(event: any, context: TriggerContext): Promise<boolean> {
     console.log(`Checking if we should relay event:\n${JSON.stringify(event)}`);
     const {
         reddit,
@@ -152,13 +152,13 @@ async function shouldRelay(event: any, context: TriggerContext) {
     }
     let shouldRelay = contentType == 'all' || contentType == itemType;
     if (shouldRelay) {
-        if (await settings.get('only-specific-user')) {
-            // @ts-ignore
-            const username: string = await settings.get('specific-username');
-            if (username == 'm') {
-                shouldRelay = shouldRelay && (await subreddit.getModerators({username: authorName}).all()).length > 0;
-            } else {
-                shouldRelay = shouldRelay && authorName.toLowerCase() == username?.toLowerCase();
+        // @ts-ignore
+        const username: string = await settings.get('specific-username');
+        if (username) {
+            const usernames = username.toLowerCase().split(',').map(name => name.trim());
+            shouldRelay = usernames.includes(authorName.toLowerCase());
+            if (!shouldRelay && usernames.includes('m')) {
+                shouldRelay = (await subreddit.getModerators({username: authorName}).all()).length > 0;
             }
         }
     }
