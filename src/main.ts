@@ -1,143 +1,295 @@
-import {Comment, Devvit, Post, Subreddit, TriggerContext} from '@devvit/public-api';
+import {ModAction} from "@devvit/protos";
+import {
+    Comment,
+    Devvit,
+    Post,
+    SettingsFormFieldValidatorEvent,
+    Subreddit,
+    TriggerContext,
+    User,
+} from "@devvit/public-api";
+
+const MINIMUM_DELAY = 3;
+const RELAY_SCHEDULED_JOB = "relay";
 
 Devvit.configure({
-    redditAPI: true,
     http: true,
+    redditAPI: true,
     redis: true,
+});
+
+function isRemoved(target: Comment | Post) {
+    console.log(`isRemoved attrs ${JSON.stringify(target, null, 2)}`);
+    return target.spam
+        || target.removed
+        // @ts-ignore
+        || target.removedByCategory
+        === "automod_filtered"
+        // @ts-ignore
+        || target.bannedBy
+        === "AutoModerator"
+        // @ts-ignore
+        || target.bannedBy?.toString()
+        === "true"
+        // @ts-ignore
+        || target.removalReason
+        === "legal";
+}
+
+Devvit.addSchedulerJob({
+    name: RELAY_SCHEDULED_JOB,
+    onRun: async (event, context) => {
+        const {reddit, settings} = context;
+        const {
+            data,
+            itemId,
+            itemType,
+            uniqueId,
+            webhookUrl,
+        } = event.data!;
+        let item;
+        item = itemType === "post" ? await reddit.getPostById(itemId) : await reddit.getCommentById(itemId);
+        if (await settings.get("ignore-removed") && isRemoved(item)) {
+            console.log(`Not relaying due to item removed: ${uniqueId}`);
+            return
+        }
+        console.log(`Relaying event ${uniqueId}`);
+        await relay(context, item, webhookUrl, data);
+    },
 });
 
 Devvit.addSettings([
     {
-        type: 'string',
-        name: 'webhook-url',
-        label: 'Discord Webhook URL:',
+        label: "Discord Webhook URL",
+        name: "webhook-url",
         onValidate: (event) => {
             if (event.value!.length == 0) {
-                return 'Please enter a webhook URL'
+                return "Please enter a webhook URL"
             }
         },
+        type: "string",
     },
     {
-        type: 'group',
-        label: 'Role Ping settings',
+        helpText: "If enabled, a role will be pinged when a new comment or post is relayed to Discord.",
         fields: [
             {
-                type: 'boolean',
-                name: 'ping-role',
-                label: 'Ping a role?',
+                type: "boolean",
+                name: "ping-role",
+                label: "Ping a role?",
             },
             {
-                type: 'string',
-                name: 'ping-role-id',
-                label: 'Role ID:',
+                type: "string",
+                name: "ping-role-id",
+                label: "Role ID",
             },
         ],
+        label: "Role Ping settings",
+        type: "group",
     },
     {
-        type: 'select',
-        name: 'content-type',
-        label: 'Content type',
-        options: [
-            {
-                label: 'Posts Only',
-                value: 'post',
-            },
-            {
-                label: 'Comments Only',
-                value: 'comment',
-            },
-            {
-                label: 'All',
-                value: 'all',
-            },
-        ],
-        multiSelect: false,
-    },
-    {
-        type: 'group',
-        label: 'Relay items by username(s)/moderators or post/user flairs. If any of these settings match, the item will be relayed.',
         fields: [
             {
-                type: 'string',
-                name: 'specific-username',
-                label: 'Username (without the "u/") or enter "m" for all moderators. Separate each item with a comma to include multiple users.',
+                helpText: "Type of content to relay to Discord",
+                label: "Content Type",
+                multiSelect: false,
+                name: "content-type",
+                defaultValue: ["post"],
+                options: [
+                    {
+                        label: "All",
+                        value: "all",
+                    },
+                    {
+                        label: "Posts Only",
+                        value: "post",
+                    },
+                    {
+                        label: "Comments Only",
+                        value: "comment",
+                    },
+                ],
+                type: "select",
             },
             {
-                type: 'string',
-                name: 'user-flair',
-                label: 'User flair text to match against. Separate each item with a comma to include multiple flairs.',
+                fields: [
+                    {
+                        helpText: "Only relay items from specific users or moderators. Username (without the \"u/\") or enter \"m\" for all moderators. Separate each item with a comma to include multiple users",
+                        label: "Username(s)/Moderators Only",
+                        name: "specific-username",
+                        type: "string",
+                    },
+                    {
+                        helpText: "User flair text to match against. Separate each item with a comma to include multiple flairs.",
+                        label: "User Flair Text",
+                        name: "user-flair",
+                        type: "string",
+                    },
+                    {
+                        helpText: "Post flair text to match against. Separate each item with a comma to include multiple flairs.",
+                        label: "Post Flair Text",
+                        name: "post-flair",
+                        type: "string",
+                    },
+                ],
+                helpText: "Relay items by username(s)/moderators or post/user flairs. If any of these settings match, the item will be relayed.",
+                label: "Inclusion Filters",
+                type: "group",
             },
             {
-                type: 'string',
-                name: 'post-flair',
-                label: 'Post flair text to match against. Separate each item with a comma to include multiple flairs.',
+                fields: [
+                    {
+                        helpText: "Ignore items from specific users or moderators. Username (without the \"u/\") or enter \"m\" for all moderators. Separate each item with a comma to include multiple users.",
+                        label: "Username(s)/Moderators Only",
+                        name: "ignore-specific-username",
+                        type: "string",
+                    },
+                    {
+                        helpText: "User flair text to ignore. Separate each item with a comma to include multiple flairs.",
+                        label: "User Flair Text",
+                        name: "ignore-user-flair",
+                        type: "string",
+                    },
+                    {
+                        helpText: "Post flair text to ignore. Separate each item with a comma to include multiple flairs.",
+                        label: "Post Flair Text",
+                        name: "ignore-post-flair",
+                        type: "string",
+                    },
+                ],
+                helpText: "Ignore by username(s)/moderators or post/user flairs. Takes precedence over all other settings. If any of these settings match, the item will not be relayed.",
+                label: "Exclusion Filters",
+                type: "group",
             },
         ],
+        helpText: "Filter items to relay to Discord based on specific criteria.",
+        label: "Filtering Settings",
+        type: "group",
     },
     {
-        type: 'group',
-        label: 'Ignore by username(s)/moderators or post/user flairs. Takes precedence over all other settings. If any of these settings match, the item will not be relayed.',
         fields: [
             {
-                type: 'string',
-                name: 'ignore-specific-username',
-                label: 'Username (without the "u/") or enter "m" to ignore all moderators. Separate each item with a comma to include multiple users.',
+                defaultValue: 0,
+                helpText: `Number of minutes to delay relaying comments to Discord. Enter 0 to disable the delay. Must be at least ${MINIMUM_DELAY} minutes.`,
+                label: "Comment Delay (in minutes)",
+                name: "comment-delay",
+                onValidate: validateDelay,
+                type: "number",
             },
             {
-                type: 'string',
-                name: 'ignore-user-flair',
-                label: 'User flair text to ignore. Separate each item with a comma to include multiple flairs.',
+                defaultValue: 0,
+                helpText: `Number of minutes to delay relaying posts to Discord. Enter 0 to disable the delay. Must be at least ${MINIMUM_DELAY} minutes.`,
+                label: "Post Delay (in minutes)",
+                name: "post-delay",
+                onValidate: validateDelay,
+                type: "number",
             },
             {
-                type: 'string',
-                name: 'ignore-post-flair',
-                label: 'Post flair text to ignore. Separate each item with a comma to include multiple flairs.',
+                helpText: "If enabled, items will not be relayed if they are removed.",
+                label: "Ignore Removed Items",
+                name: "ignore-removed",
+                type: "boolean",
+            },
+            {
+                helpText: "If enabled, items that are later approved will be relayed.",
+                label: "Retry On Approval",
+                name: "retry-on-approval",
+                type: "boolean",
             },
         ],
+        helpText: "Delay relaying to Discord for a set amount of time after the item is created to allow for moderation.",
+        label: "Delay Settings",
+        type: "group",
     },
 ]);
 
-// Logging on a PostCreate event
 Devvit.addTrigger({
-    events: ['PostCreate', 'CommentCreate'],
-    onEvent: async function (event: any, context: TriggerContext) {
-        console.log(`Received ${event.type} event:\n${JSON.stringify(event)}`);
-        if (await shouldRelay(event, context)) {
-            await relay(event, context);
+    events: ["CommentCreate", "PostCreate"],
+    onEvent: async function (
+        event: any,
+        context: TriggerContext,
+    ) {
+        const {reddit, redis} = context;
+        console.log(`Received ${event.type} event:\n${JSON.stringify(event, null, 2)}`);
+        const uniqueId = event.type === "CommentCreate"
+            ? `${event.comment.parentId}/${event.comment.id}`
+            : event.post.id;
+        const item = event.type === "CommentCreate"
+            ? await reddit.getCommentById(event.comment.id)
+            : await reddit.getPostById(event.id);
+        console.log(`Received ${event.type} event (${uniqueId}):\n${JSON.stringify(event, null, 2)}`);
+        const shouldRelayItem = await shouldRelay(event, context);
+        await redis.hSet(item.id, {shouldRelay: shouldRelayItem.toString()});
+        if (shouldRelayItem) {
+            await scheduleRelay(context, item, false);
         }
     },
 });
 
-async function relay(event: any, context: TriggerContext) {
-    console.log(`Relaying event:\n${JSON.stringify(event)}`);
+Devvit.addTrigger({
+    events: ["ModAction"],
+    onEvent: async function (event: ModAction, context: TriggerContext) {
+        const {reddit, redis, settings} = context;
+        if ((
+            event.action != "approvelink" && event.action != "approvecomment"
+        )) {
+            return;
+        }
+        const retryOnApproval = await settings.get("retry-on-approval");
+        if (!retryOnApproval) {
+            return;
+        }
+        let target: Comment | Post;
+        let uniqueId: string;
+        if (event.action == "approvelink") {
+            target = await reddit.getPostById(event.targetPost?.id || "");
+            uniqueId = target.id;
+        } else {
+            target = await reddit.getCommentById(event.targetComment?.id || "");
+            uniqueId = `${target.parentId}/${target.id}`
+        }
+        console.log(`Received ${event.action} mod action (${uniqueId})`);
+        const shouldRelayItem = await redis.hGet(target.id, "shouldRelay") === "true";
+        const wasRelayed = await redis.hGet(target.id, "relayed") === "true";
+        if (shouldRelayItem && !wasRelayed) {
+            await scheduleRelay(context, target, true);
+        } else {
+            console.log(`Not relaying ${event.action} mod action (${uniqueId}) due to shouldRelayItem: ${shouldRelayItem} and wasRelayed: ${wasRelayed}`);
+        }
+    },
+});
+
+async function relay(
+    context: TriggerContext,
+    item: Comment | Post,
+    webhookUrl: string,
+    data: { allowed_mentions: { parse: string[] }; content: string },
+) {
+    const response = await fetch(webhookUrl, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify(data),
+    })
+    console.log(`Webhook response: ${response.status} ${await response.text()}`);
+    await context.redis.hSet(item.id, {relayed: "true"});
+}
+
+async function scheduleRelay(context: TriggerContext, item: Comment | Post, skipDelay: boolean) {
     const {
         redis,
         settings,
     } = context;
-    const {
-        type: eventType,
-        author: {
-            name: authorName,
-            url: authorUrl,
-        },
-        comment,
-        post,
-    } = event;
-    let item: Post | Comment;
-    let itemType: string;
-    if (eventType === 'PostCreate') {
-        item = post
-        itemType = "post";
-    } else {
-        item = comment
-        itemType = "comment";
-    }
     const webhookUrl = (
-        await settings.get('webhook-url')
+        await settings.get("webhook-url")
     )!.toString();
-    let message = `New [${itemType}](https://www.reddit.com${item.permalink}) by [u/${authorName}](${authorUrl})!`
-    if (await settings.get('ping-role')) {
-        const roleId = await settings.get('ping-role-id');
+    const {url: authorUrl, username} = await item.getAuthor() as User;
+    const itemType = item instanceof Comment ? "comment" : "post";
+    const uniqueId = item instanceof Comment ? `${item.parentId}/${item.id}` : item.id;
+    let delay: number = skipDelay ? 0 : await settings.get(`${itemType}-delay`) || 0;
+    let message = `New [${itemType}](https://www.reddit.com${item.permalink}) by [u/${username}](${authorUrl})!`
+    if (await settings.get("ping-role")) {
+        const roleId = await settings.get("ping-role-id");
         message = `${message}\n<@&${roleId}>`
     }
     const data = {
@@ -150,22 +302,40 @@ async function relay(event: any, context: TriggerContext) {
             ],
         },
     }
-    const response = await fetch(webhookUrl, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(data),
-    })
-    await redis.set(item.id, 'true');
-    console.log(`Webhook response: ${response.status} ${await response.text()}`);
+    if (delay == 0) {
+        console.log(`Relaying event ${uniqueId}`);
+        if (await settings.get("ignore-removed") && isRemoved(item)) {
+            console.log(`Not relaying due to item removed: ${uniqueId}`);
+            return
+        }
+        await relay(context, item, webhookUrl, data);
+    } else {
+        const runAt = new Date(Date.now() + delay * 60 * 1000)
+        console.log(`Scheduling relay (${uniqueId}) for ${delay} minutes from now (${runAt})`);
+        if (await redis.hGet(item.id, "scheduled") === "true") {
+            console.log(`Relay job already scheduled for ${uniqueId}`);
+            return
+        }
+        await context.scheduler.runJob({
+            name: RELAY_SCHEDULED_JOB,
+            data: {
+                data,
+                itemType,
+                itemId: item.id,
+                uniqueId,
+                webhookUrl,
+            },
+            runAt: runAt,
+        });
+    }
+    await redis.hSet(item.id, {scheduled: "true"});
 }
 
 async function shouldRelay(event: any, context: TriggerContext): Promise<boolean> {
     console.log(`Checking if we should relay event:\n${JSON.stringify(event)}`);
     const {
-        redis,
         reddit,
+        redis,
         settings,
     } = context;
     const subreddit: Subreddit = await reddit.getCurrentSubreddit()
@@ -187,34 +357,31 @@ async function shouldRelay(event: any, context: TriggerContext): Promise<boolean
         },
     } = event;
     let itemType: string;
-    const contentType = await settings.get('content-type');
-    if (eventType === 'PostCreate') {
-        itemType = 'post'
-    } else {
-        itemType = 'comment'
-    }
-    let shouldRelay = contentType == 'all' || contentType == itemType;
+    const contentType = await settings.get("content-type");
     let item: Post | Comment;
-    if (itemType === 'post') {
+    if (eventType === "PostCreate") {
         item = event.post
+        itemType = "post"
     } else {
         item = event.comment
+        itemType = "comment"
     }
+    let shouldRelay = contentType == "all" || contentType == itemType;
     shouldRelay = shouldRelay && !(
-        await redis.get(item.id) === 'true'
+        await redis.hGet(item.id, "relayed") === "true"
     );
     let checks: boolean[] = []
     if (shouldRelay) {
         // @ts-ignore
-        const ignoreUsername: string = await settings.get('ignore-specific-username');
+        const ignoreUsername: string = await settings.get("ignore-specific-username");
         if (ignoreUsername) {
             let shouldRelayUserIgnore: boolean;
             const ignoreUsernames = ignoreUsername.toLowerCase()
-                .split(',')
+                .split(",")
                 .map(name => name.trim())
                 .filter(name => name.length > 0);
             shouldRelayUserIgnore = !ignoreUsernames.includes(authorName.toLowerCase());
-            if (shouldRelayUserIgnore && ignoreUsernames.includes('m')) {
+            if (shouldRelayUserIgnore && ignoreUsernames.includes("m")) {
                 shouldRelayUserIgnore = (
                     await subreddit.getModerators({username: authorName}).all()
                 ).length == 0;
@@ -225,11 +392,11 @@ async function shouldRelay(event: any, context: TriggerContext): Promise<boolean
             }
         }
         // @ts-ignore
-        const ignoreFlair: string = await settings.get('ignore-user-flair');
+        const ignoreFlair: string = await settings.get("ignore-user-flair");
         if (ignoreFlair) {
             let shouldRelayUserFlair: boolean;
             const ignoreFlairs = ignoreFlair.toLowerCase()
-                .split(',')
+                .split(",")
                 .map(flair => flair.trim())
                 .filter(flair => flair.length > 0);
             shouldRelayUserFlair = !(
@@ -242,11 +409,11 @@ async function shouldRelay(event: any, context: TriggerContext): Promise<boolean
             }
         }
         // @ts-ignore
-        const ignorePostFlair: string = await settings.get('ignore-post-flair');
-        if (ignorePostFlair && itemType === 'post') {
+        const ignorePostFlair: string = await settings.get("ignore-post-flair");
+        if (ignorePostFlair && itemType === "post") {
             let shouldRelayPostFlair: boolean;
             const ignorePostFlairs = ignorePostFlair.toLowerCase()
-                .split(',')
+                .split(",")
                 .map(flair => flair.trim())
                 .filter(flair => flair.length > 0);
             shouldRelayPostFlair = !(
@@ -261,14 +428,14 @@ async function shouldRelay(event: any, context: TriggerContext): Promise<boolean
         }
 
         // @ts-ignore
-        const username: string = await settings.get('specific-username');
+        const username: string = await settings.get("specific-username");
         if (username) {
             const usernames = username.toLowerCase()
-                .split(',')
+                .split(",")
                 .map(name => name.trim())
                 .filter(name => name.length > 0);
             shouldRelay = usernames.includes(authorName.toLowerCase());
-            if (!shouldRelay && usernames.includes('m')) {
+            if (!shouldRelay && usernames.includes("m")) {
                 shouldRelay = (
                     await subreddit.getModerators({username: authorName}).all()
                 ).length > 0;
@@ -276,10 +443,10 @@ async function shouldRelay(event: any, context: TriggerContext): Promise<boolean
             checks.push(shouldRelay);
         }
         // @ts-ignore
-        const userFlair: string = await settings.get('user-flair');
+        const userFlair: string = await settings.get("user-flair");
         if (userFlair) {
             const userFlairs = userFlair.toLowerCase()
-                .split(',')
+                .split(",")
                 .map(flair => flair.trim())
                 .filter(flair => flair.length > 0);
             shouldRelay = userFlairs.includes(event.author.flair.text.toLowerCase())
@@ -287,10 +454,10 @@ async function shouldRelay(event: any, context: TriggerContext): Promise<boolean
             checks.push(shouldRelay);
         }
         // @ts-ignore
-        const postFlair: string = await settings.get('post-flair');
-        if (postFlair && itemType === 'post') {
+        const postFlair: string = await settings.get("post-flair");
+        if (postFlair && itemType === "post") {
             const postFlairs = postFlair.toLowerCase()
-                .split(',')
+                .split(",")
                 .map(flair => flair.trim())
                 .filter(flair => flair.length > 0);
             if (item instanceof Post) {
@@ -310,4 +477,12 @@ async function shouldRelay(event: any, context: TriggerContext): Promise<boolean
     return shouldRelay;
 }
 
+function validateDelay(event: SettingsFormFieldValidatorEvent<number>) {
+    const inputValue = event.value || 0
+    if (inputValue != 0 && inputValue < MINIMUM_DELAY) {
+        return `Please enter a delay of at least ${MINIMUM_DELAY} minutes`
+    }
+}
+
+// noinspection JSUnusedGlobalSymbols
 export default Devvit;
