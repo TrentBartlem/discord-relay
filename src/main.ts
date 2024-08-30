@@ -209,14 +209,13 @@ Devvit.addTrigger({
         context: TriggerContext,
     ) {
         const {reddit, redis} = context;
-        console.log(`Received ${event.type} event:\n${JSON.stringify(event, null, 2)}`);
         const uniqueId = event.type === "CommentCreate"
             ? `${event.comment.parentId}/${event.comment.id}`
             : event.post.id;
         const item = event.type === "CommentCreate"
             ? await reddit.getCommentById(event.comment.id)
-            : await reddit.getPostById(event.id);
-        console.log(`Received ${event.type} event (${uniqueId}):\n${JSON.stringify(event, null, 2)}`);
+            : await reddit.getPostById(event.post.id);
+        console.log(`Received ${event.type} event (${uniqueId}) by u/${item.authorName}`);
         const shouldRelayItem = await shouldRelay(event, context);
         await redis.hSet(item.id, {shouldRelay: shouldRelayItem.toString()});
         if (shouldRelayItem) {
@@ -332,33 +331,14 @@ async function scheduleRelay(context: TriggerContext, item: Comment | Post, skip
 }
 
 async function shouldRelay(event: any, context: TriggerContext): Promise<boolean> {
-    console.log(`Checking if we should relay event:\n${JSON.stringify(event)}`);
-    const {
-        reddit,
-        redis,
-        settings,
-    } = context;
-    const subreddit: Subreddit = await reddit.getCurrentSubreddit()
-    const userFlairs = (
-        await subreddit.getUserFlairTemplates()
-    )
-    const flairMap = new Map<string, string>();
-    for (const flair of userFlairs) {
-        flairMap.set(flair.id, flair.text);
-    }
-    const postFlairs = await subreddit.getPostFlairTemplates()
-    for (const flair of postFlairs) {
-        flairMap.set(flair.id, flair.text);
-    }
+    let itemType: string;
+    let item: Post | Comment;
     const {
         type: eventType,
         author: {
             name: authorName,
         },
     } = event;
-    let itemType: string;
-    const contentType = await settings.get("content-type");
-    let item: Post | Comment;
     if (eventType === "PostCreate") {
         item = event.post
         itemType = "post"
@@ -366,14 +346,45 @@ async function shouldRelay(event: any, context: TriggerContext): Promise<boolean
         item = event.comment
         itemType = "comment"
     }
+    console.log(`Checking if we should relay event (${item instanceof Comment
+        ? `${item.parentId}/${item.id}`
+        : item.id})`);
+    const {
+        reddit,
+        redis,
+        settings,
+    } = context;
+    const subreddit: Subreddit = await reddit.getCurrentSubreddit()
+
+    const flairMap = new Map<string, string>();
+
+    const ignoreFlair: string = await settings.get("ignore-user-flair") || "";
+    const userFlair: string = await settings.get("user-flair") || "";
+    if (ignoreFlair || userFlair) {
+        const userFlairs = (
+            await subreddit.getUserFlairTemplates()
+        )
+        for (const flair of userFlairs) {
+            flairMap.set(flair.id, flair.text);
+        }
+    }
+
+    const ignorePostFlair: string = await settings.get("ignore-post-flair") || "";
+    const postFlair: string = await settings.get("post-flair") || "";
+    if (ignorePostFlair || postFlair) {
+        const postFlairs = await subreddit.getPostFlairTemplates()
+        for (const flair of postFlairs) {
+            flairMap.set(flair.id, flair.text);
+        }
+    }
+    const contentType = await settings.get("content-type");
     let shouldRelay = contentType == "all" || contentType == itemType;
     shouldRelay = shouldRelay && !(
         await redis.hGet(item.id, "relayed") === "true"
     );
     let checks: boolean[] = []
     if (shouldRelay) {
-        // @ts-ignore
-        const ignoreUsername: string = await settings.get("ignore-specific-username");
+        const ignoreUsername: string = await settings.get("ignore-specific-username") || "";
         if (ignoreUsername) {
             let shouldRelayUserIgnore: boolean;
             const ignoreUsernames = ignoreUsername.toLowerCase()
@@ -391,8 +402,6 @@ async function shouldRelay(event: any, context: TriggerContext): Promise<boolean
                 return false;
             }
         }
-        // @ts-ignore
-        const ignoreFlair: string = await settings.get("ignore-user-flair");
         if (ignoreFlair) {
             let shouldRelayUserFlair: boolean;
             const ignoreFlairs = ignoreFlair.toLowerCase()
@@ -408,8 +417,6 @@ async function shouldRelay(event: any, context: TriggerContext): Promise<boolean
                 return false;
             }
         }
-        // @ts-ignore
-        const ignorePostFlair: string = await settings.get("ignore-post-flair");
         if (ignorePostFlair && itemType === "post") {
             let shouldRelayPostFlair: boolean;
             const ignorePostFlairs = ignorePostFlair.toLowerCase()
@@ -426,9 +433,7 @@ async function shouldRelay(event: any, context: TriggerContext): Promise<boolean
                 return false;
             }
         }
-
-        // @ts-ignore
-        const username: string = await settings.get("specific-username");
+        const username: string = await settings.get("specific-username") || "";
         if (username) {
             const usernames = username.toLowerCase()
                 .split(",")
@@ -442,8 +447,6 @@ async function shouldRelay(event: any, context: TriggerContext): Promise<boolean
             }
             checks.push(shouldRelay);
         }
-        // @ts-ignore
-        const userFlair: string = await settings.get("user-flair");
         if (userFlair) {
             const userFlairs = userFlair.toLowerCase()
                 .split(",")
@@ -453,8 +456,6 @@ async function shouldRelay(event: any, context: TriggerContext): Promise<boolean
                 || userFlairs.includes(flairMap.get(event.author.flair.templateId) || "");
             checks.push(shouldRelay);
         }
-        // @ts-ignore
-        const postFlair: string = await settings.get("post-flair");
         if (postFlair && itemType === "post") {
             const postFlairs = postFlair.toLowerCase()
                 .split(",")

@@ -54,6 +54,10 @@ If you have any feedback or suggestions for Discord Relay, please contact my aut
 
 ## Changes
 
+### 2.2.3
+
+- Fix bug when posts are submitted.
+
 ### 2.2.0
 
 - Added the ability to add a delay before relaying items to Discord.
