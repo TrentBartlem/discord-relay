@@ -15,6 +15,7 @@
     "publish-prerelease": "npm run bump-prerelease && devvit publish"
   },
   "dependencies": {
+    "@devvit/cli": "^0.11.0",
     "@devvit/public-api": "^0.10.25",
     "devvit": "^0.10.25"
   },

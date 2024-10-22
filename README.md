@@ -13,6 +13,9 @@ subreddit:`https://developers.reddit.com/r/SUBREDDIT/apps/discord-relay`.
 ## Configuration
 
 - **Discord Webhook URL**: The URL of the Discord webhook you want to relay items to.
+- **Relay Mode**: Determines when items are relayed to Discord. Both options will include the set delay
+    - **Immediately**: Relay items as soon as they are created.
+    - **Front Page**: Relay only items that hit the front page of the subreddit.
 - **Role Ping settings**: The role to ping when a new item is relayed to Discord.
     - **Ping a role?**: If enabled, ping the role when a new item is relayed.
     - **Role ID**: The Discord ID of the role to ping. To obtain, enable Developer Mode in Discord, right-click the
@@ -42,6 +45,9 @@ subreddit:`https://developers.reddit.com/r/SUBREDDIT/apps/discord-relay`.
       least 3 minutes.
     - **Ignore Removed Items**: If enabled, do not relay items that have been removed.
     - **Retry On Approval**: If enabled, retry relaying items that were removed and not relayed after the delay.
+- **Suppress Item Embed**: If enabled, the embed of the comment/post like being relayed will be suppressed.
+- **Suppress Author Embed**: If enabled, the embed of the author will be suppressed. Profiles do not have embeds shown
+  unless they are NSFW.
 
 ## Known Issues
 
@@ -50,9 +56,15 @@ subreddit:`https://developers.reddit.com/r/SUBREDDIT/apps/discord-relay`.
 
 ## Feedback
 
-If you have any feedback or suggestions for Discord Relay, please contact my author, u/Lil_SpazJoekp, on Reddit.
+If you have any feedback or suggestions for Discord Relay, file a bug report or feature request on the
+[GitHub page](https://github.com/LilSpazJoekp/discord-relay).
 
 ## Changes
+
+### 2.3.0
+
+- Added the ability to only relay posts that hit the front page of the subreddit.
+- Added the ability to suppress embeds for the item and author links in Discord.
 
 ### 2.2.3
 

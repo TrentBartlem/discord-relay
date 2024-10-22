@@ -11,6 +11,7 @@ import {
 
 const MINIMUM_DELAY = 3;
 const RELAY_SCHEDULED_JOB = "relay";
+const FRONT_PAGE_CHECK_SCHEDULED_JOB = "check-front-page";
 
 Devvit.configure({
     http: true,
@@ -58,6 +59,28 @@ Devvit.addSchedulerJob({
     },
 });
 
+Devvit.addSchedulerJob({
+    name: FRONT_PAGE_CHECK_SCHEDULED_JOB,
+    onRun: async (event, context) => {
+        const {reddit, redis, settings} = context;
+        const relayMode: string[] = await settings.get("relay-mode") || ["immediately"];
+        if (relayMode[0] !== "front-page") {
+            return;
+        }
+        console.log("Checking front page")
+        const subreddit = await reddit.getCurrentSubreddit();
+        const posts = await subreddit.getTopPosts({limit: 100}).all()
+        console.log(`Checking ${posts.length} posts`);
+        posts.map(async (post) => {
+            const shouldRelayItem = await shouldRelay({type: "FrontPageCheck", post}, context);
+            await redis.hSet(post.id, {shouldRelay: shouldRelayItem.toString()});
+            if (shouldRelayItem) {
+                await scheduleRelay(context, post, false);
+            }
+        });
+    },
+});
+
 Devvit.addSettings([
     {
         label: "Discord Webhook URL",
@@ -70,30 +93,89 @@ Devvit.addSettings([
         type: "string",
     },
     {
-        helpText: "If enabled, a role will be pinged when a new comment or post is relayed to Discord.",
+        helpText: "Determines when items are relayed to Discord. If set to 'immediately', items are relayed as soon as they are created. If set to 'front page', items are relayed when they reach the front page of the subreddit.",
         fields: [
             {
-                type: "boolean",
-                name: "ping-role",
-                label: "Ping a role?",
+                defaultValue: ["immediately"],
+                helpText: "Choose when to relay items to Discord.",
+                label: "Relay Mode",
+                multiSelect: false,
+                name: "relay-mode",
+                options: [
+                    {
+                        label: "Immediately",
+                        value: "immediately",
+                    },
+                    {
+                        label: "Front Page",
+                        value: "front-page",
+                    },
+                ],
+                type: "select",
             },
             {
-                type: "string",
-                name: "ping-role-id",
-                label: "Role ID",
+                defaultValue: ["hour"],
+                helpText: "Choose the time frame for the front page relay mode. Has no effect if relay mode is set to 'immediately'.",
+                label: "Front Page Time Frame",
+                multiSelect: false,
+                name: "front-page-time-frame",
+                options: [
+                    {
+                        label: "Hour",
+                        value: "hour",
+                    },
+                    {
+                        label: "Day",
+                        value: "day",
+                    },
+                    {
+                        label: "Week",
+                        value: "week",
+                    },
+                    {
+                        label: "Month",
+                        value: "month",
+                    },
+                    {
+                        label: "Year",
+                        value: "year",
+                    },
+                    {
+                        label: "All",
+                        value: "all",
+                    },
+                ],
+                type: "select",
             },
         ],
+        label: "Relay Mode Settings",
+        type: "group",
+    },
+    {
+        fields: [
+            {
+                label: "Ping a role?",
+                name: "ping-role",
+                type: "boolean",
+            },
+            {
+                label: "Role ID",
+                name: "ping-role-id",
+                type: "string",
+            },
+        ],
+        helpText: "If enabled, a role will be pinged when a new comment or post is relayed to Discord.",
         label: "Role Ping settings",
         type: "group",
     },
     {
         fields: [
             {
+                defaultValue: ["post"],
                 helpText: "Type of content to relay to Discord",
                 label: "Content Type",
                 multiSelect: false,
                 name: "content-type",
-                defaultValue: ["post"],
                 options: [
                     {
                         label: "All",
@@ -190,17 +272,53 @@ Devvit.addSettings([
                 type: "boolean",
             },
             {
-                helpText: "If enabled, items that are later approved will be relayed.",
+                helpText: "If enabled, items that are later approved will be relayed. This will also relay any item that is approved.",
                 label: "Retry On Approval",
                 name: "retry-on-approval",
                 type: "boolean",
+            },
+            {
+                defaultValue: 0,
+                helpText: `Score threshold to relay posts to Discord. Ignored if relay mode is set to 'immediately'. Enter 0 to relay when the post appears on the sub's front page.`,
+                label: "Post score threshold",
+                name: "post-score-threshold",
+                type: "number",
             },
         ],
         helpText: "Delay relaying to Discord for a set amount of time after the item is created to allow for moderation.",
         label: "Delay Settings",
         type: "group",
     },
+    {
+        defaultValue: false,
+        helpText: "If enabled, the embed of the comment/post like being relayed will be suppressed.",
+        label: "Suppress comment/post embeds?",
+        name: "suppress-item-embed",
+        type: "boolean",
+    },
+    {
+        defaultValue: false,
+        helpText: "If enabled, the embed of the author will be suppressed. Profiles do not have embeds shown unless they are NSFW.",
+        label: "Suppress NSFW author embeds?",
+        name: "suppress-author-embed",
+        type: "boolean",
+    },
 ]);
+
+Devvit.addTrigger({
+    events: ["AppUpgrade", "AppInstall"],
+    onEvent: async function (event: any, context: TriggerContext) {
+        const {scheduler} = context;
+        await scheduler.listJobs()
+            .then(jobs => jobs.filter(job => job.name === FRONT_PAGE_CHECK_SCHEDULED_JOB)
+                .map(async job => await scheduler.cancelJob(job.id)),
+            );
+        await scheduler.runJob({
+            name: FRONT_PAGE_CHECK_SCHEDULED_JOB,
+            cron: "* * * * *",
+        });
+    },
+});
 
 Devvit.addTrigger({
     events: ["CommentCreate", "PostCreate"],
@@ -208,7 +326,11 @@ Devvit.addTrigger({
         event: any,
         context: TriggerContext,
     ) {
-        const {reddit, redis} = context;
+        const {reddit, redis, settings} = context;
+        const relayMode: string[] = await settings.get("relay-mode") || ["immediately"];
+        if (relayMode[0] === "front-page") {
+            return;
+        }
         const uniqueId = event.type === "CommentCreate"
             ? `${event.comment.parentId}/${event.comment.id}`
             : event.post.id;
@@ -286,7 +408,13 @@ async function scheduleRelay(context: TriggerContext, item: Comment | Post, skip
     const itemType = item instanceof Comment ? "comment" : "post";
     const uniqueId = item instanceof Comment ? `${item.parentId}/${item.id}` : item.id;
     let delay: number = skipDelay ? 0 : await settings.get(`${itemType}-delay`) || 0;
-    let message = `New [${itemType}](https://www.reddit.com${item.permalink}) by [u/${username}](${authorUrl})!`
+    let suppressAuthorEmbed = await settings.get("suppress-author-embed") || false;
+    let suppressItemEmbed = await settings.get("suppress-item-embed") || false;
+    let message = `New [${itemType}](${suppressItemEmbed
+        ? '<'
+        : ''}https://www.reddit.com${item.permalink}${suppressItemEmbed
+        ? '>'
+        : ''}) by [u/${username}](${suppressAuthorEmbed ? '<' : ''}${authorUrl}${suppressAuthorEmbed ? '>' : ''})!`
     if (await settings.get("ping-role")) {
         const roleId = await settings.get("ping-role-id");
         message = `${message}\n<@&${roleId}>`
@@ -333,18 +461,23 @@ async function scheduleRelay(context: TriggerContext, item: Comment | Post, skip
 async function shouldRelay(event: any, context: TriggerContext): Promise<boolean> {
     let itemType: string;
     let item: Post | Comment;
-    const {
-        type: eventType,
-        author: {
-            name: authorName,
-        },
-    } = event;
-    if (eventType === "PostCreate") {
-        item = event.post
-        itemType = "post"
-    } else {
-        item = event.comment
-        itemType = "comment"
+    let authorName: string;
+    switch (event.type) {
+        case "PostCreate":
+            item = event.post
+            itemType = "post"
+            authorName = event.author.name
+            break;
+        case "CommentCreate":
+            item = event.comment
+            itemType = "comment"
+            authorName = event.author.name
+            break;
+        default:
+            item = event.post
+            itemType = "post"
+            authorName = item.authorName
+            break;
     }
     console.log(`Checking if we should relay event (${item instanceof Comment
         ? `${item.parentId}/${item.id}`
@@ -377,11 +510,15 @@ async function shouldRelay(event: any, context: TriggerContext): Promise<boolean
             flairMap.set(flair.id, flair.text);
         }
     }
+
     const contentType = await settings.get("content-type");
+    const relayMode: string[] = await settings.get("relay-mode") || ["immediately"];
+
     let shouldRelay = contentType == "all" || contentType == itemType;
     shouldRelay = shouldRelay && !(
         await redis.hGet(item.id, "relayed") === "true"
     );
+
     let checks: boolean[] = []
     if (shouldRelay) {
         const ignoreUsername: string = await settings.get("ignore-specific-username") || "";
@@ -467,6 +604,12 @@ async function shouldRelay(event: any, context: TriggerContext): Promise<boolean
                     || "") || "");
             }
             checks.push(shouldRelay);
+        }
+        if (relayMode[0] === "front-page") {
+            const postScoreThreshold = await settings.get("post-score-threshold") || 0;
+            if (item instanceof Post) {
+                shouldRelay = item.score >= postScoreThreshold;
+            }
         }
     }
     if (checks.length == 0) {
