@@ -1,8 +1,8 @@
 import {ModAction} from "@devvit/protos";
 import {
     Comment,
-    Devvit,
-    Post,
+    Devvit, JobContext,
+    Post, ScheduledJobEvent,
     SettingsFormFieldValidatorEvent,
     Subreddit,
     TriggerContext,
@@ -39,7 +39,7 @@ function isRemoved(target: Comment | Post) {
 
 Devvit.addSchedulerJob({
     name: RELAY_SCHEDULED_JOB,
-    onRun: async (event, context) => {
+    onRun: async (event: ScheduledJobEvent<any>, context: JobContext) => {
         const {reddit, settings} = context;
         const {
             data,
@@ -608,7 +608,7 @@ async function shouldRelay(event: any, context: TriggerContext): Promise<boolean
         if (relayMode[0] === "front-page") {
             const postScoreThreshold = await settings.get("post-score-threshold") || 0;
             if (item instanceof Post) {
-                shouldRelay = item.score >= postScoreThreshold;
+                shouldRelay = item.score >= (postScoreThreshold as number);
             }
         }
     }

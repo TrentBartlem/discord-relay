@@ -61,6 +61,10 @@ If you have any feedback or suggestions for Discord Relay, file a bug report or 
 
 ## Changes
 
+### 2.3.1
+
+- Update devvit version for vulnerability fix.
+
 ### 2.3.0
 
 - Added the ability to only relay posts that hit the front page of the subreddit.
