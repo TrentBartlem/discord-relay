@@ -1,3 +1,5 @@
+![test workflow](https://github.com/LilSpazJoekp/discord-relay/actions/workflows/test.yml/badge.svg)
+
 # Discord Relay
 
 Discord Relay is an app that allows subreddit moderators to relay items from their subreddit to a Discord channel. This
