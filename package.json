@@ -14,7 +14,7 @@
     "publish-patch": "npm run bump-patch && devvit publish --public",
     "publish-prerelease": "npm run bump-prerelease && devvit publish --public",
     "test": "npm run test:unit",
-    "test:unit": "vitest --run"
+    "test:unit": "vitest --run --passWithNoTests"
   },
   "dependencies": {
     "@devvit/protos": "0.11.5",
