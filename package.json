@@ -12,7 +12,9 @@
     "publish-major": "npm run bump-major && devvit publish --public",
     "publish-minor": "npm run bump-minor && devvit publish --public",
     "publish-patch": "npm run bump-patch && devvit publish --public",
-    "publish-prerelease": "npm run bump-prerelease && devvit publish --public"
+    "publish-prerelease": "npm run bump-prerelease && devvit publish --public",
+    "test": "npm run test:unit",
+    "test:unit": "vitest --run"
   },
   "dependencies": {
     "@devvit/protos": "0.11.5",
@@ -21,6 +23,7 @@
   },
   "devDependencies": {
     "@devvit/tsconfig": "0.11.5",
-    "typescript": "5.3.2"
+    "typescript": "5.3.2",
+    "vitest": "^2.0.5"
   }
 }
